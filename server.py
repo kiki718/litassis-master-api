@@ -46,6 +46,7 @@ DEFAULT_CONFIG = {
     "pdf_dir": "outputs/pdfs",
     "markdown_dir": "outputs/markdown",
     "parse_tasks_dir": "outputs/parse_tasks",
+    "storage_base_dir": "",
     "max_pdf_bytes": 80 * 1024 * 1024,
     "mineru_adapter": {
         "mode": "command",
@@ -169,7 +170,7 @@ class EvidenceRef:
     page: str | None = None
 
 
-SCIENCE_EXTRACTOR_VERSION = "n3-light-v2"
+SCIENCE_EXTRACTOR_VERSION = "n4-cn-analysis-v1"
 
 
 @dataclass
@@ -183,6 +184,7 @@ class ScienceRecord:
     parameters: list[dict[str, Any]] = field(default_factory=list)
     conclusions: list[dict[str, Any]] = field(default_factory=list)
     evidence: list[dict[str, Any]] = field(default_factory=list)
+    analysis: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -205,6 +207,29 @@ def load_config() -> dict[str, Any]:
 
 
 CONFIG = load_config()
+
+
+def deep_merge_dict(base: dict[str, Any], updates: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(base)
+    for key, value in updates.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = deep_merge_dict(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def write_config_values(values: dict[str, Any]) -> None:
+    config_file = ROOT / "config.json"
+    existing: dict[str, Any] = {}
+    if config_file.exists():
+        try:
+            existing = json.loads(config_file.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            existing = {}
+    updated = deep_merge_dict(existing, values)
+    config_file.write_text(json.dumps(updated, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    CONFIG.update(deep_merge_dict(CONFIG, values))
 
 
 def load_env_file() -> None:
@@ -251,12 +276,62 @@ def write_env_values(values: dict[str, str]) -> None:
     env_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def configured_storage_base() -> Path | None:
+    raw = clean_text(str(CONFIG.get("storage_base_dir") or ""))
+    if not raw:
+        return None
+    path = Path(raw).expanduser()
+    if not path.is_absolute():
+        path = ROOT / path
+    return path
+
+
+def config_path(key: str, default: str) -> Path:
+    raw = clean_text(str(CONFIG.get(key) or default))
+    path = Path(raw)
+    if path.is_absolute():
+        return path
+    base = configured_storage_base()
+    if base:
+        parts = path.parts
+        if parts and parts[0].lower() == "outputs":
+            path = Path(*parts[1:]) if len(parts) > 1 else Path(".")
+        return base / path
+    return ROOT / path
+
+
+def config_path_display(path: Path) -> str:
+    try:
+        return path.relative_to(ROOT).as_posix()
+    except ValueError:
+        return str(path)
+
+
+def stored_file_path(value: str | Path) -> Path:
+    path = Path(str(value))
+    if path.is_absolute():
+        return path
+    return ROOT / path
+
+
+def is_path_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
 def ensure_dirs() -> None:
     (ROOT / CONFIG["cache_dir"]).mkdir(parents=True, exist_ok=True)
     (ROOT / "outputs").mkdir(parents=True, exist_ok=True)
-    (ROOT / CONFIG.get("pdf_dir", "outputs/pdfs")).mkdir(parents=True, exist_ok=True)
-    (ROOT / CONFIG.get("markdown_dir", "outputs/markdown")).mkdir(parents=True, exist_ok=True)
-    (ROOT / CONFIG.get("parse_tasks_dir", "outputs/parse_tasks")).mkdir(parents=True, exist_ok=True)
+    config_path("output_file", "outputs/hotspots.json").parent.mkdir(parents=True, exist_ok=True)
+    config_path("literature_corpus_file", "outputs/literature_corpus.md").parent.mkdir(parents=True, exist_ok=True)
+    config_path("paper_records_file", "outputs/paper_records.json").parent.mkdir(parents=True, exist_ok=True)
+    config_path("science_records_file", "outputs/science_records.json").parent.mkdir(parents=True, exist_ok=True)
+    config_path("pdf_dir", "outputs/pdfs").mkdir(parents=True, exist_ok=True)
+    config_path("markdown_dir", "outputs/markdown").mkdir(parents=True, exist_ok=True)
+    config_path("parse_tasks_dir", "outputs/parse_tasks").mkdir(parents=True, exist_ok=True)
     (ROOT / "logs").mkdir(parents=True, exist_ok=True)
 
 
@@ -1179,7 +1254,7 @@ def summarize_topic(topic: str, papers: list[Paper]) -> dict[str, Any]:
 
 
 def write_literature_corpus(topic: str, papers: list[Paper], timeframe_months: int | None) -> Path:
-    output_path = ROOT / CONFIG.get("literature_corpus_file", "outputs/literature_corpus.md")
+    output_path = config_path("literature_corpus_file", "outputs/literature_corpus.md")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     lines = [
         f"# Literature Corpus: {topic}",
@@ -1622,7 +1697,7 @@ def paper_from_payload(payload: dict[str, Any]) -> Paper:
 
 
 def paper_records_path() -> Path:
-    return ROOT / CONFIG.get("paper_records_file", "outputs/paper_records.json")
+    return config_path("paper_records_file", "outputs/paper_records.json")
 
 
 def load_paper_records() -> dict[str, PaperRecord]:
@@ -1658,7 +1733,7 @@ def save_paper_records(records: dict[str, PaperRecord]) -> None:
 
 
 def science_records_path() -> Path:
-    return ROOT / CONFIG.get("science_records_file", "outputs/science_records.json")
+    return config_path("science_records_file", "outputs/science_records.json")
 
 
 def load_science_records() -> dict[str, ScienceRecord]:
@@ -1765,10 +1840,7 @@ def safe_filename(value: str, limit: int = 96) -> str:
 
 
 def relative_path(path: Path) -> str:
-    try:
-        return path.relative_to(ROOT).as_posix()
-    except ValueError:
-        return str(path)
+    return config_path_display(path)
 
 
 def arxiv_pdf_url(arxiv_id: str, version: str | None = None) -> str:
@@ -1916,7 +1988,7 @@ def save_uploaded_paper_pdf(paper: Paper, payload: dict[str, Any], pdf_body: byt
     title = paper.title or Path(uploaded_name).stem
     filename_stem = safe_filename(Path(uploaded_name or title).stem, 80)
     filename = f"{safe_filename(paper_id)}_{filename_stem}.pdf"
-    pdf_path = ROOT / CONFIG.get("pdf_dir", "outputs/pdfs") / filename
+    pdf_path = config_path("pdf_dir", "outputs/pdfs") / filename
     pdf_path.write_bytes(pdf_body)
     candidate_links = list(dict.fromkeys((existing.candidate_links if existing else []) + [source_label]))
     record = PaperRecord(
@@ -1949,7 +2021,7 @@ def fetch_and_save_paper_pdf(paper: Paper, payload: dict[str, Any] | None = None
     records = load_paper_records()
     paper_id = paper_id_for(paper, payload)
     existing = records.get(paper_id)
-    if existing and existing.fetch_status == "success" and existing.pdf_path and (ROOT / existing.pdf_path).exists():
+    if existing and existing.fetch_status == "success" and existing.pdf_path and stored_file_path(existing.pdf_path).exists():
         return existing
     identifiers = paper_identifier_payload(paper, payload)
     candidates = pdf_candidate_links(paper, payload)
@@ -1976,7 +2048,7 @@ def fetch_and_save_paper_pdf(paper: Paper, payload: dict[str, Any] | None = None
         body, error, final_url = download_pdf_bytes(candidate)
         if body:
             filename = f"{safe_filename(paper_id)}_{safe_filename(paper.title, 80)}.pdf"
-            pdf_path = ROOT / CONFIG.get("pdf_dir", "outputs/pdfs") / filename
+            pdf_path = config_path("pdf_dir", "outputs/pdfs") / filename
             pdf_path.write_bytes(body)
             record.source_url = final_url or candidate
             record.download_time = datetime.now().isoformat(timespec="seconds")
@@ -2003,7 +2075,7 @@ def paper_record_payload(paper: Paper, payload: dict[str, Any] | None = None) ->
 
 
 def parse_tasks_dir() -> Path:
-    return ROOT / CONFIG.get("parse_tasks_dir", "outputs/parse_tasks")
+    return config_path("parse_tasks_dir", "outputs/parse_tasks")
 
 
 def parse_task_path(task_id: str) -> Path:
@@ -2111,11 +2183,12 @@ def process_is_alive(pid: int) -> bool:
 def resolve_record_pdf_path(record: PaperRecord) -> Path | None:
     if not record.pdf_path:
         return None
-    pdf_path = (ROOT / record.pdf_path).resolve()
-    pdf_root = (ROOT / CONFIG.get("pdf_dir", "outputs/pdfs")).resolve()
-    try:
-        pdf_path.relative_to(pdf_root)
-    except ValueError:
+    pdf_path = stored_file_path(record.pdf_path).resolve()
+    allowed_roots = [
+        config_path("pdf_dir", "outputs/pdfs").resolve(),
+        (ROOT / clean_text(str(CONFIG.get("pdf_dir") or "outputs/pdfs"))).resolve(),
+    ]
+    if not any(is_path_relative_to(pdf_path, root) for root in allowed_roots):
         return None
     return pdf_path if pdf_path.exists() else None
 
@@ -2123,11 +2196,12 @@ def resolve_record_pdf_path(record: PaperRecord) -> Path | None:
 def resolve_record_markdown_path(record: PaperRecord) -> Path | None:
     if not record.markdown_path:
         return None
-    md_path = (ROOT / record.markdown_path).resolve()
-    md_root = (ROOT / CONFIG.get("markdown_dir", "outputs/markdown")).resolve()
-    try:
-        md_path.relative_to(md_root)
-    except ValueError:
+    md_path = stored_file_path(record.markdown_path).resolve()
+    allowed_roots = [
+        config_path("markdown_dir", "outputs/markdown").resolve(),
+        (ROOT / clean_text(str(CONFIG.get("markdown_dir") or "outputs/markdown"))).resolve(),
+    ]
+    if not any(is_path_relative_to(md_path, root) for root in allowed_roots):
         return None
     return md_path if md_path.exists() else None
 
@@ -2373,6 +2447,130 @@ def extract_conclusions_from_sections(sections: list[dict[str, str]], record: Sc
     return conclusions
 
 
+METHOD_CN_LABELS = {
+    "transit spectroscopy": "凌星/透射光谱",
+    "radial velocity": "径向速度",
+    "direct imaging": "直接成像",
+    "optical interferometry": "光学干涉",
+    "photometry": "光度测量",
+    "spectroscopy": "光谱观测",
+    "astrometry": "天体测量",
+    "simulation/modeling": "模拟与模型反演",
+}
+
+
+PARAMETER_CN_LABELS = {
+    "distance": "距离",
+    "radius": "半径",
+    "mass": "质量",
+    "temperature": "有效温度",
+    "orbital_period": "轨道周期",
+}
+
+
+def science_item_label(item: dict[str, Any], labels: dict[str, str]) -> str:
+    name = clean_text(str(item.get("name") or ""))
+    return labels.get(name, name or "-")
+
+
+def local_science_analysis(record: ScienceRecord) -> dict[str, Any]:
+    target_names = [clean_text(str(item.get("name") or "")) for item in record.targets if item.get("name")]
+    method_names = [science_item_label(item, METHOD_CN_LABELS) for item in record.methods]
+    observed_params = [
+        science_item_label(item, PARAMETER_CN_LABELS)
+        for item in record.parameters
+        if clean_text(str(item.get("value") or ""))
+    ]
+    source_label = "MinerU Markdown 全文" if record.source == "markdown" else "题名与摘要"
+    summary_parts = [f"本次科学信息提取基于{source_label}，已保留原文证据片段用于回溯。"]
+    if target_names:
+        summary_parts.append(f"文中明确出现的研究对象包括：{'、'.join(target_names[:6])}。")
+    if method_names:
+        summary_parts.append(f"方法层面主要涉及：{'、'.join(method_names[:6])}。")
+    if observed_params:
+        summary_parts.append(f"可直接读出的物理参数包括：{'、'.join(observed_params[:6])}。")
+    if not target_names and not method_names and not observed_params:
+        summary_parts.append("当前规则抽取未找到高置信度对象、方法或白名单参数，建议结合原文证据复核。")
+    return {
+        "provider": "local_rules",
+        "summary_cn": "".join(summary_parts),
+        "research_object_cn": "、".join(target_names[:8]) if target_names else "未识别到明确研究对象。",
+        "methods_cn": "、".join(method_names[:8]) if method_names else "未识别到明确观测方法或仪器。",
+        "parameters_cn": "、".join(observed_params[:8]) if observed_params else "未识别到白名单物理参数。",
+        "conclusions_cn": "已抽取结论原文片段，请结合下方证据阅读。" if record.conclusions else "未识别到明确结论句。",
+    }
+
+
+def deepseek_science_analysis(record: ScienceRecord, text: str) -> dict[str, Any] | None:
+    if not CONFIG.get("deepseek_enabled", True) or not os.getenv("DEEPSEEK_API_KEY"):
+        return None
+    excerpt = text[:50000]
+    key_material = json.dumps(
+        {
+            "mode": "science_cn_analysis_v1",
+            "paper_id": record.paper_id,
+            "source": record.source,
+            "extractor_version": record.extractor_version,
+            "record": {
+                "targets": record.targets,
+                "methods": record.methods,
+                "parameters": record.parameters,
+                "conclusions": record.conclusions,
+                "evidence": record.evidence[:20],
+            },
+            "text_hash": hashlib.sha1(excerpt.encode("utf-8", errors="ignore")).hexdigest(),
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    cached = read_cache("deepseek_science_analysis", key_material, max_age_hours=24 * 30)
+    if isinstance(cached, dict):
+        return cached
+    prompt = {
+        "text_source": record.source,
+        "full_text_or_abstract": excerpt,
+        "rule_extracted_science_record": asdict(record),
+        "requirements": [
+            "请用中文给出跨领域读者容易理解的科学信息分析。",
+            "分析结论必须来自 full_text_or_abstract 或 rule_extracted_science_record，不要编造。",
+            "原文证据片段不要翻译，保留其原始语言；你只输出中文分析字段。",
+            "公式、物理量和单位请保留 Markdown 公式写法，例如 $R_p/R_*$ 或 $$F_\\nu$$，不要把公式解释改写成无法渲染的纯文本。",
+            "输出 JSON 对象。",
+        ],
+        "output_schema": {
+            "summary_cn": "150-300字中文总览",
+            "research_object_cn": "中文说明研究对象及其语义",
+            "methods_cn": "中文说明观测/数据/模型方法",
+            "parameters_cn": "中文说明关键物理参数及意义",
+            "conclusions_cn": "中文说明主要结论与限制",
+        },
+    }
+    try:
+        parsed = deepseek_chat_json(
+            [
+                {"role": "system", "content": "你是严谨的天文学文献科学信息抽取助手。只输出可解析 JSON。"},
+                {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
+            ],
+            timeout=100,
+        )
+        if not isinstance(parsed, dict):
+            raise ValueError("science analysis response is not a JSON object")
+        result = {
+            "provider": "deepseek",
+            "summary_cn": clean_text(str(parsed.get("summary_cn") or "")),
+            "research_object_cn": clean_text(str(parsed.get("research_object_cn") or "")),
+            "methods_cn": clean_text(str(parsed.get("methods_cn") or "")),
+            "parameters_cn": clean_text(str(parsed.get("parameters_cn") or "")),
+            "conclusions_cn": clean_text(str(parsed.get("conclusions_cn") or "")),
+        }
+        if result["summary_cn"]:
+            write_cache("deepseek_science_analysis", key_material, result)
+            return result
+    except Exception as exc:
+        log_event("DeepSeek science analysis failed; using local science summary", {"paper_id": record.paper_id, "error": str(exc)})
+    return None
+
+
 def extract_science_from_text(paper_id: str, text: str, source: str = "abstract") -> ScienceRecord:
     sections = markdown_sections(text)
     record = ScienceRecord(paper_id=paper_id, source=source)
@@ -2380,6 +2578,7 @@ def extract_science_from_text(paper_id: str, text: str, source: str = "abstract"
     record.methods = extract_methods_from_sections(sections, record)
     record.parameters = extract_parameters_from_sections(sections, record)
     record.conclusions = extract_conclusions_from_sections(sections, record)
+    record.analysis = deepseek_science_analysis(record, text) or local_science_analysis(record)
     return record
 
 
@@ -2407,7 +2606,7 @@ def science_record_for_record(record: PaperRecord, force: bool = False) -> Scien
 
 
 def mineru_runtime_dir(record: PaperRecord) -> Path:
-    path = ROOT / "outputs" / "mineru_runtime" / safe_filename(record.paper_id, 80)
+    path = config_path("parse_tasks_dir", "outputs/parse_tasks").parent / "mineru_runtime" / safe_filename(record.paper_id, 80)
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -2564,6 +2763,34 @@ def mineru_api_base(config: dict[str, Any]) -> str:
     return clean_text(str(config.get("api_base") or "https://mineru.net")).rstrip("/")
 
 
+def mineru_config_payload() -> dict[str, Any]:
+    adapter = dict(CONFIG.get("mineru_adapter") or {})
+    storage_base = clean_text(str(CONFIG.get("storage_base_dir") or ""))
+    return {
+        "enabled": bool(mineru_api_token()),
+        "token_preview": "已配置" if mineru_api_token() else "未配置",
+        "mode": clean_text(str(adapter.get("mode") or "command")),
+        "command": clean_text(str(adapter.get("command") or "mineru")),
+        "service_url": clean_text(str(adapter.get("service_url") or "")),
+        "api_base": mineru_api_base(adapter),
+        "api_model_version": clean_text(str(adapter.get("api_model_version") or "vlm")),
+        "api_language": clean_text(str(adapter.get("api_language") or "en")),
+        "api_enable_formula": config_bool(adapter.get("api_enable_formula"), True),
+        "api_enable_table": config_bool(adapter.get("api_enable_table"), True),
+        "api_poll_interval_seconds": int(adapter.get("api_poll_interval_seconds") or 5),
+        "storage_base_dir": storage_base,
+        "resolved_storage_base_dir": str(configured_storage_base() or (ROOT / "outputs")),
+        "paths": {
+            "pdf_dir": str(config_path("pdf_dir", "outputs/pdfs")),
+            "markdown_dir": str(config_path("markdown_dir", "outputs/markdown")),
+            "parse_tasks_dir": str(config_path("parse_tasks_dir", "outputs/parse_tasks")),
+            "paper_records_file": str(config_path("paper_records_file", "outputs/paper_records.json")),
+            "science_records_file": str(config_path("science_records_file", "outputs/science_records.json")),
+            "output_file": str(config_path("output_file", "outputs/hotspots.json")),
+        },
+    }
+
+
 def mineru_api_json_request(config: dict[str, Any], method: str, path: str, payload: dict[str, Any] | None = None, timeout: int = 60) -> dict[str, Any]:
     token = mineru_api_token()
     if not token:
@@ -2687,7 +2914,7 @@ def is_ssl_eof_error(exc: BaseException) -> bool:
 def infer_parse_progress(task: ParseTask) -> ParseTask:
     if task.status not in {"queued", "running"}:
         return task
-    output_dir = ROOT / CONFIG.get("markdown_dir", "outputs/markdown") / safe_filename(task.paper_id, 120)
+    output_dir = config_path("markdown_dir", "outputs/markdown") / safe_filename(task.paper_id, 120)
     stderr_text = strip_ansi(read_log_tail(output_dir / "mineru.stderr.log", max_chars=24000))
     stdout_text = strip_ansi(read_log_tail(output_dir / "mineru.stdout.log", max_chars=4000))
     model_stdout_text = strip_ansi(read_log_tail(output_dir / "mineru-models-download.stdout.log", max_chars=24000))
@@ -2772,7 +2999,7 @@ class MinerUAdapter:
         pdf_path = resolve_record_pdf_path(record)
         if not pdf_path:
             return "failed", None, "PDF 文件不存在或路径无效，请先重新获取 PDF"
-        output_dir = ROOT / CONFIG.get("markdown_dir", "outputs/markdown") / safe_filename(record.paper_id, 120)
+        output_dir = config_path("markdown_dir", "outputs/markdown") / safe_filename(record.paper_id, 120)
         output_dir.mkdir(parents=True, exist_ok=True)
         preferred_path = output_dir / f"{safe_filename(record.paper_id, 120)}.md"
         mode = clean_text(str(self.config.get("mode") or "command")).lower()
@@ -3641,7 +3868,7 @@ def build_topic_hotspots(topic: str, limit: int | None = None, timeframe_months:
     corpus_path = write_literature_corpus(topic, papers, timeframe_months)
     results: list[dict[str, Any]] = []
     if not papers:
-        output_path = ROOT / CONFIG["output_file"]
+        output_path = config_path("output_file", "outputs/hotspots.json")
         try_write_text(output_path, "[]", encoding="utf-8")
         output = {
             "generated_at": datetime.now().isoformat(timespec="seconds"),
@@ -3749,7 +3976,7 @@ def build_topic_hotspots(topic: str, limit: int | None = None, timeframe_months:
         )
     results.sort(key=lambda item: float(item.get("rank_score", item.get("heat", 0))), reverse=True)
     results = results[: int(limit or CONFIG["max_targets_per_run"])]
-    output_path = ROOT / CONFIG["output_file"]
+    output_path = config_path("output_file", "outputs/hotspots.json")
     try_write_text(output_path, json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8")
     output = {
         "generated_at": datetime.now().isoformat(timespec="seconds"),
@@ -4006,7 +4233,7 @@ def build_hotspots(limit: int | None = None, use_seed: bool = False, timeframe_m
             )
     results.sort(key=lambda item: float(item.get("heat", 0)), reverse=True)
     output = {"generated_at": datetime.now().isoformat(timespec="seconds"), "timeframe_months": timeframe_months, "items": results, "validation": validate_hotspots(results, targets)}
-    output_path = ROOT / CONFIG["output_file"]
+    output_path = config_path("output_file", "outputs/hotspots.json")
     try_write_text(output_path, json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8")
     log_event("热点分析完成", {"count": len(results), "output": str(output_path)})
     return output
@@ -4111,7 +4338,10 @@ class LiteratureAssistantHandler(SimpleHTTPRequestHandler):
                     "targets": len(load_targets()),
                     "ads_enabled": bool(os.getenv("ADS_API_KEY")),
                     "deepseek_enabled": bool(os.getenv("DEEPSEEK_API_KEY")),
+                    "mineru_enabled": bool(mineru_api_token()),
                     "default_timeframe_months": int(CONFIG.get("default_timeframe_months", 12)),
+                    "storage_base_dir": clean_text(str(CONFIG.get("storage_base_dir") or "")),
+                    "resolved_storage_base_dir": str(configured_storage_base() or (ROOT / "outputs")),
                 }
                 json_response(self, payload)
             elif path == "/api/targets":
@@ -4127,6 +4357,8 @@ class LiteratureAssistantHandler(SimpleHTTPRequestHandler):
                         "key_preview": ("已配置" if os.getenv("DEEPSEEK_API_KEY") else "未配置"),
                     },
                 )
+            elif path == "/api/mineru/config":
+                json_response(self, mineru_config_payload())
             elif path == "/api/seed-hotspots":
                 targets = load_targets()
                 seeds = load_seed_hotspots()
@@ -4145,14 +4377,8 @@ class LiteratureAssistantHandler(SimpleHTTPRequestHandler):
                 if not record or not record.pdf_path:
                     json_response(self, {"ok": False, "error": "PDF not found"}, HTTPStatus.NOT_FOUND)
                     return
-                pdf_path = (ROOT / record.pdf_path).resolve()
-                pdf_root = (ROOT / CONFIG.get("pdf_dir", "outputs/pdfs")).resolve()
-                try:
-                    pdf_path.relative_to(pdf_root)
-                except ValueError:
-                    json_response(self, {"ok": False, "error": "PDF file path is invalid"}, HTTPStatus.FORBIDDEN)
-                    return
-                if not pdf_path.exists():
+                pdf_path = resolve_record_pdf_path(record)
+                if not pdf_path:
                     json_response(self, {"ok": False, "error": "PDF file missing"}, HTTPStatus.NOT_FOUND)
                     return
                 body = pdf_path.read_bytes()
@@ -4218,14 +4444,14 @@ class LiteratureAssistantHandler(SimpleHTTPRequestHandler):
                     return
                 json_response(self, {"ok": True, "record": asdict(science)})
             elif path == "/api/hotspots":
-                output_path = ROOT / CONFIG["output_file"]
+                output_path = config_path("output_file", "outputs/hotspots.json")
                 if output_path.exists():
                     items = json.loads(output_path.read_text(encoding="utf-8"))
                     json_response(self, {"items": items, "validation": validate_hotspots(items, load_targets())})
                 else:
                     json_response(self, build_hotspots(use_seed=True))
             elif path == "/api/export":
-                output_path = ROOT / CONFIG["output_file"]
+                output_path = config_path("output_file", "outputs/hotspots.json")
                 if not output_path.exists():
                     build_hotspots(use_seed=True)
                 body = output_path.read_bytes()
@@ -4364,6 +4590,40 @@ class LiteratureAssistantHandler(SimpleHTTPRequestHandler):
                         "model": model,
                     },
                 )
+            elif parsed.path == "/api/mineru/config":
+                if not require_api_password(self, payload=payload):
+                    return
+                adapter = dict(CONFIG.get("mineru_adapter") or {})
+                mode = clean_text(str(payload.get("mode") or adapter.get("mode") or "command")).lower()
+                if mode not in {"command", "official_api", "api", "mineru_api", "service"}:
+                    mode = "command"
+                api_base = clean_text(str(payload.get("api_base") or adapter.get("api_base") or "https://mineru.net")).rstrip("/")
+                model_version = clean_text(str(payload.get("api_model_version") or adapter.get("api_model_version") or "vlm"))
+                api_language = clean_text(str(payload.get("api_language") or adapter.get("api_language") or "en"))
+                command = clean_text(str(payload.get("command") or adapter.get("command") or "mineru"))
+                service_url = clean_text(str(payload.get("service_url") or adapter.get("service_url") or ""))
+                poll_interval = max(2, int(payload.get("api_poll_interval_seconds") or adapter.get("api_poll_interval_seconds") or 5))
+                storage_base_dir = clean_text(str(payload.get("storage_base_dir") or ""))
+                config_update = {
+                    "storage_base_dir": storage_base_dir,
+                    "mineru_adapter": {
+                        "mode": mode,
+                        "command": command,
+                        "service_url": service_url,
+                        "api_base": api_base,
+                        "api_model_version": model_version,
+                        "api_language": api_language,
+                        "api_enable_formula": bool(payload.get("api_enable_formula", adapter.get("api_enable_formula", True))),
+                        "api_enable_table": bool(payload.get("api_enable_table", adapter.get("api_enable_table", True))),
+                        "api_poll_interval_seconds": poll_interval,
+                    },
+                }
+                write_config_values(config_update)
+                api_token = str(payload.get("api_token") or "").strip()
+                if api_token:
+                    write_env_values({"MINERU_API_TOKEN": api_token})
+                ensure_dirs()
+                json_response(self, {"ok": True, **mineru_config_payload()})
             elif parsed.path == "/api/validate":
                 if not require_api_password(self, payload=payload):
                     return

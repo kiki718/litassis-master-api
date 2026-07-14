@@ -8,6 +8,7 @@
   "pdf_dir": "outputs/pdfs",
   "markdown_dir": "outputs/markdown",
   "parse_tasks_dir": "outputs/parse_tasks",
+  "storage_base_dir": "",
   "mineru_adapter": {
     "mode": "command",
     "command": "mineru",

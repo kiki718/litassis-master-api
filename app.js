@@ -936,6 +936,51 @@ function renderEvidenceRefs(record, refs = []) {
     .join("");
 }
 
+const methodLabelMap = {
+  "transit spectroscopy": "凌星/透射光谱",
+  "radial velocity": "径向速度",
+  "direct imaging": "直接成像",
+  "optical interferometry": "光学干涉",
+  photometry: "光度测量",
+  spectroscopy: "光谱观测",
+  astrometry: "天体测量",
+  "simulation/modeling": "模拟与模型反演"
+};
+
+const parameterLabelMap = {
+  distance: "距离",
+  radius: "半径",
+  mass: "质量",
+  temperature: "有效温度",
+  orbital_period: "轨道周期"
+};
+
+function scienceLabel(value = "", labelMap = {}) {
+  return labelMap[value] || value || "-";
+}
+
+function renderScienceAnalysis(analysis = {}) {
+  const fields = [
+    ["中文总览", analysis.summary_cn],
+    ["研究对象", analysis.research_object_cn],
+    ["方法理解", analysis.methods_cn],
+    ["参数理解", analysis.parameters_cn],
+    ["结论理解", analysis.conclusions_cn]
+  ].filter(([, value]) => value);
+  if (!fields.length) return "";
+  return `
+    <section class="science-section science-analysis-section">
+      <h3>中文分析</h3>
+      ${fields.map(([label, value]) => `
+        <article>
+          <strong>${escapeHtml(label)}</strong>
+          ${renderMathText(value, "p")}
+        </article>
+      `).join("")}
+    </section>
+  `;
+}
+
 function renderScienceRecord(record) {
   if (!record) return "<p>暂无科学信息抽取结果。</p>";
   const targets = record.targets || [];
@@ -944,6 +989,7 @@ function renderScienceRecord(record) {
   const conclusions = record.conclusions || [];
   return `
     <div class="science-meta">来源：${record.source === "markdown" ? "MinerU Markdown 全文" : "题名与摘要回退"} · ${escapeHtml(record.updated_at || "")}</div>
+    ${renderScienceAnalysis(record.analysis || {})}
     <section class="science-section">
       <h3>研究对象与别名</h3>
       ${targets.length ? targets.map((item) => `
@@ -958,7 +1004,7 @@ function renderScienceRecord(record) {
       <h3>观测方法或仪器</h3>
       ${methods.length ? methods.map((item) => `
         <article>
-          <strong>${escapeHtml(item.name || "-")}</strong>
+          <strong>${escapeHtml(scienceLabel(item.name, methodLabelMap))}</strong>
           <span>${escapeHtml((item.keywords || []).join("、"))}</span>
           ${renderEvidenceRefs(record, item.evidence_refs)}
         </article>
@@ -969,8 +1015,8 @@ function renderScienceRecord(record) {
       <div class="parameter-grid">
         ${parameters.map((item) => `
           <div class="parameter-cell ${item.value ? "" : "empty"}">
-            <strong>${escapeHtml(item.name || "-")}</strong>
-            <span>${item.value ? `${escapeHtml(item.value)} ${escapeHtml(item.unit || "")}` : "未出现"}</span>
+            <strong>${escapeHtml(scienceLabel(item.name, parameterLabelMap))}</strong>
+            ${item.value ? renderMathText(`${item.value} ${item.unit || ""}`, "span") : "<span>未出现</span>"}
             ${renderEvidenceRefs(record, item.evidence_refs)}
           </div>
         `).join("")}
@@ -1051,10 +1097,12 @@ async function loadFromApi() {
     document.querySelector("#sequenceFile").textContent = "221_targets_literature_search_enriched.csv";
     document.querySelector("#runLabel").textContent = "后端已连接";
     document.querySelector("#runMeta").textContent = `${catalogTargets.length} 个参考目标记录`;
+    const mineruText = status?.mineru_enabled ? "MinerU 已配置" : "MinerU 未配置";
+    const storageText = status?.storage_base_dir ? `本地存储：${status.storage_base_dir}` : "本地存储：项目 outputs";
     if (status?.deepseek_enabled) {
-      setNotice(`DeepSeek 已启用。当前扒取时间范围：${timeframeLabel()}。`, "ok");
+      setNotice(`DeepSeek 已启用，${mineruText}。${storageText}；当前扒取时间范围：${timeframeLabel()}。`, status?.mineru_enabled ? "ok" : "warn");
     } else {
-      setNotice(`DeepSeek 未配置。当前扒取时间范围：${timeframeLabel()}；会使用 arXiv 检索和本地启发式分析。`, "warn");
+      setNotice(`DeepSeek 未配置，${mineruText}。${storageText}；当前扒取时间范围：${timeframeLabel()}。`, "warn");
     }
     renderAll();
   } catch (error) {
@@ -1276,6 +1324,104 @@ document.querySelector("#testDeepseekConfig").addEventListener("click", refreshD
 document.querySelector("#saveDeepseekConfig").addEventListener("click", saveDeepseekConfig);
 document.querySelector("#deepseekModal").addEventListener("click", (event) => {
   if (event.target.id === "deepseekModal") closeDeepseekModal();
+});
+
+function renderMineruPathPreview(config = {}) {
+  const paths = config.paths || {};
+  const lines = [
+    `存储根目录：${config.storage_base_dir || "项目 outputs 目录"}`,
+    paths.pdf_dir ? `PDF：${paths.pdf_dir}` : "",
+    paths.markdown_dir ? `解析 Markdown：${paths.markdown_dir}` : "",
+    paths.science_records_file ? `科学信息：${paths.science_records_file}` : "",
+    paths.output_file ? `热点分析：${paths.output_file}` : ""
+  ].filter(Boolean);
+  document.querySelector("#mineruPathPreview").textContent = lines.join(" · ");
+}
+
+async function refreshMineruConfig() {
+  try {
+    const response = await fetch("/api/mineru/config");
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const config = await response.json();
+    document.querySelector("#mineruStatus").textContent = config.enabled ? "已配置 API Token" : "未配置 API Token";
+    document.querySelector("#mineruMode").value = config.mode === "api" || config.mode === "mineru_api" ? "official_api" : (config.mode || "command");
+    document.querySelector("#mineruApiBase").value = config.api_base || "https://mineru.net";
+    document.querySelector("#mineruModelVersion").value = config.api_model_version || "vlm";
+    document.querySelector("#mineruLanguage").value = config.api_language || "en";
+    document.querySelector("#mineruCommand").value = config.command || "mineru";
+    document.querySelector("#mineruServiceUrl").value = config.service_url || "";
+    document.querySelector("#storageBaseDir").value = config.storage_base_dir || "";
+    document.querySelector("#mineruPollInterval").value = config.api_poll_interval_seconds || 5;
+    document.querySelector("#mineruEnableFormula").checked = Boolean(config.api_enable_formula);
+    document.querySelector("#mineruEnableTable").checked = Boolean(config.api_enable_table);
+    renderMineruPathPreview(config);
+    document.querySelector("#mineruConfigNotice").textContent = config.enabled
+      ? "MinerU Token 已配置。保存新 Token 可覆盖当前配置。"
+      : "请输入 MinerU Token 或改用本地命令/外部服务模式。";
+    document.querySelector("#mineruConfigNotice").className = `notice-bar ${config.enabled ? "ok" : "warn"}`;
+  } catch (error) {
+    document.querySelector("#mineruStatus").textContent = "状态读取失败";
+    document.querySelector("#mineruConfigNotice").textContent = `读取配置失败：${error.message}`;
+    document.querySelector("#mineruConfigNotice").className = "notice-bar error";
+  }
+}
+
+function openMineruModal() {
+  document.querySelector("#mineruModal").hidden = false;
+  refreshMineruConfig();
+  if (window.lucide) window.lucide.createIcons();
+}
+
+function closeMineruModal() {
+  document.querySelector("#mineruModal").hidden = true;
+}
+
+async function saveMineruConfig() {
+  const button = document.querySelector("#saveMineruConfig");
+  const label = button.querySelector("span");
+  button.disabled = true;
+  label.textContent = "保存中...";
+  try {
+    const response = await fetch("/api/mineru/config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        api_token: document.querySelector("#mineruApiToken").value.trim(),
+        mode: document.querySelector("#mineruMode").value,
+        api_base: document.querySelector("#mineruApiBase").value.trim(),
+        api_model_version: document.querySelector("#mineruModelVersion").value.trim(),
+        api_language: document.querySelector("#mineruLanguage").value.trim(),
+        command: document.querySelector("#mineruCommand").value.trim(),
+        service_url: document.querySelector("#mineruServiceUrl").value.trim(),
+        storage_base_dir: document.querySelector("#storageBaseDir").value.trim(),
+        api_poll_interval_seconds: Number(document.querySelector("#mineruPollInterval").value || 5),
+        api_enable_formula: document.querySelector("#mineruEnableFormula").checked,
+        api_enable_table: document.querySelector("#mineruEnableTable").checked
+      })
+    });
+    const payload = await response.json();
+    if (!response.ok || !payload.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+    document.querySelector("#mineruApiToken").value = "";
+    document.querySelector("#mineruStatus").textContent = payload.enabled ? "已配置 API Token" : "未配置 API Token";
+    renderMineruPathPreview(payload);
+    document.querySelector("#mineruConfigNotice").textContent = "MinerU 配置已保存，并已在当前服务中生效。";
+    document.querySelector("#mineruConfigNotice").className = "notice-bar ok";
+    setNotice("MinerU 配置已更新；后续 PDF、解析与科学信息会保存到设置的本地路径。", "ok");
+  } catch (error) {
+    document.querySelector("#mineruConfigNotice").textContent = `保存失败：${error.message}`;
+    document.querySelector("#mineruConfigNotice").className = "notice-bar error";
+  } finally {
+    button.disabled = false;
+    label.textContent = "保存配置";
+  }
+}
+
+document.querySelector("#openMineruConfig").addEventListener("click", openMineruModal);
+document.querySelector("#closeMineruConfig").addEventListener("click", closeMineruModal);
+document.querySelector("#testMineruConfig").addEventListener("click", refreshMineruConfig);
+document.querySelector("#saveMineruConfig").addEventListener("click", saveMineruConfig);
+document.querySelector("#mineruModal").addEventListener("click", (event) => {
+  if (event.target.id === "mineruModal") closeMineruModal();
 });
 document.querySelector("#closePaperAnalysis").addEventListener("click", closePaperAnalysisModal);
 document.querySelector("#paperAnalysisModal").addEventListener("click", (event) => {

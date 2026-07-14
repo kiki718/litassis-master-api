@@ -109,6 +109,10 @@
               <i data-lucide="key-round"></i>
               <span>DeepSeek</span>
             </button>
+            <button class="secondary-button" id="openMineruConfig">
+              <i data-lucide="file-cog"></i>
+              <span>MinerU</span>
+            </button>
             <button class="primary-button" id="simulateRun">
               <i data-lucide="sparkles"></i>
               <span>生成分析</span>
@@ -333,6 +337,82 @@
           </button>
         </div>
         <div class="notice-bar" id="deepseekConfigNotice">保存后会写入项目目录的 .env，并立即在当前服务中生效。</div>
+      </section>
+    </div>
+
+    <div class="modal-backdrop" id="mineruModal" hidden>
+      <section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="mineruTitle">
+        <div class="panel-head">
+          <div>
+            <h2 id="mineruTitle">MinerU 配置</h2>
+            <span id="mineruStatus">当前状态读取中</span>
+          </div>
+          <button class="icon-button small" id="closeMineruConfig" title="关闭">
+            <i data-lucide="x"></i>
+          </button>
+        </div>
+        <div class="form-grid two-col">
+          <label>
+            <span>API Token</span>
+            <input id="mineruApiToken" type="password" placeholder="保存新 Token 可覆盖当前配置" autocomplete="off" />
+          </label>
+          <label>
+            <span>运行模式</span>
+            <select id="mineruMode">
+              <option value="official_api">官方 API</option>
+              <option value="command">本地命令</option>
+              <option value="service">外部服务</option>
+            </select>
+          </label>
+          <label>
+            <span>API Base URL</span>
+            <input id="mineruApiBase" value="https://mineru.net" />
+          </label>
+          <label>
+            <span>模型版本</span>
+            <input id="mineruModelVersion" value="vlm" />
+          </label>
+          <label>
+            <span>语言</span>
+            <input id="mineruLanguage" value="en" />
+          </label>
+          <label>
+            <span>本地命令</span>
+            <input id="mineruCommand" value="mineru" />
+          </label>
+          <label>
+            <span>外部服务 URL</span>
+            <input id="mineruServiceUrl" placeholder="http://127.0.0.1:8000/parse" />
+          </label>
+          <label>
+            <span>本地存储路径</span>
+            <input id="storageBaseDir" placeholder="留空则使用项目 outputs 目录" />
+          </label>
+          <label>
+            <span>轮询间隔（秒）</span>
+            <input id="mineruPollInterval" type="number" min="2" max="60" value="5" />
+          </label>
+          <label class="checkbox-control">
+            <input id="mineruEnableFormula" type="checkbox" checked />
+            <span>解析公式</span>
+          </label>
+          <label class="checkbox-control">
+            <input id="mineruEnableTable" type="checkbox" checked />
+            <span>解析表格</span>
+          </label>
+        </div>
+        <div class="path-preview" id="mineruPathPreview">读取本地存储路径中...</div>
+        <div class="modal-actions">
+          <button class="secondary-button" id="testMineruConfig">
+            <i data-lucide="activity"></i>
+            <span>检查状态</span>
+          </button>
+          <button class="primary-button" id="saveMineruConfig">
+            <i data-lucide="save"></i>
+            <span>保存配置</span>
+          </button>
+        </div>
+        <div class="notice-bar" id="mineruConfigNotice">保存后会更新 config.json；Token 会写入本地 .env 并立即生效。</div>
       </section>
     </div>
 
